@@ -1,5 +1,5 @@
 # TerryWare 🦀
-Ransomware I wrote in Rust to demo for a future blog post about reverse engineering binaries.<br>
+Ransomware I wrote in Rust to demo for my <a href="https://connorkas.com/blog/2024-09/sorryterry/">blog post on reverse engineering</a><br>
 I'm not a great programmer, I only have experience with scripting, so apologies for the sloppy code.
 <br><br>
 TerryWare Demo:<br>
