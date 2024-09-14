@@ -1,0 +1,11 @@
+[package]
+name = "TerryWare"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+winreg = "0.52.0"
+winapi = { version = "0.3.9", features = ["wincrypt"] }
+sha2 = "0.10.8"
+rand = "0.8.5"
+libaes = "0.7.0"
