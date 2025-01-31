@@ -1,4 +1,6 @@
 # TerryWare 🦀
+**1/31/2025**: My website is currently offline, I'll update this repo when I get it fixed
+
 Ransomware I wrote in Rust to demo for my <a href="https://connorkas.com/blog/2024-09/sorryterry/">blog post on reverse engineering</a><br>
 I'm not a great programmer, I only have experience with scripting, so apologies for the sloppy code.
 <br><br>
