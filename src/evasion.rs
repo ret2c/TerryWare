@@ -1,22 +1,19 @@
-use std::time::SystemTime;
-use std::process::exit;
 use std::thread;
 use std::env;
 use winreg::RegKey;
 use winreg::enums::HKEY_CURRENT_USER;
 use winreg::enums::KEY_READ;
-use std::mem;
-use winapi::um::sysinfoapi::{SYSTEM_INFO, GetSystemInfo};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 use winreg::enums::HKEY_LOCAL_MACHINE;
-use winapi::um::winnt::MEMORY_BASIC_INFORMATION;
 use rand::Rng;
 use sysinfo::System;
 use colored::*;
-use windows::Win32::System::Memory::{VirtualAlloc, MEM_COMMIT, MEM_RESERVE, PAGE_READWRITE};
-use windows::Win32::System::Memory::VirtualQuery;
+use winapi::um::sysinfoapi::{GetTickCount64, GetSystemInfo, SYSTEM_INFO};
+use std::collections::HashSet;
+use winapi::um::memoryapi::VirtualQuery;
+use winapi::um::winnt::{MEMORY_BASIC_INFORMATION, MEM_COMMIT};
 
 pub struct EvasionCheck;
 
@@ -35,12 +32,19 @@ impl EvasionCheck {
         };
 
         if !skip_check {
-            if let Ok(uptime) = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-                if uptime.as_secs() < 120 {
-                    println!("{} Suspicious uptime detected:\n    {} seconds", "[!]".red(), uptime.as_secs());
+            unsafe {
+                let uptime_ms = GetTickCount64();
+                let uptime_secs = uptime_ms / 1000;
+                
+                if uptime_secs < 120 {
+                    println!("{} Suspicious uptime detected:\n    {} seconds", "[!]".red(), uptime_secs);
                     suspicious_environment = true;
                 } else {
-                    println!("{} Uptime normal: {} seconds", "[+]".green(), uptime.as_secs());
+                    let days = uptime_secs / (24 * 60 * 60);
+                    let hours = (uptime_secs % (24 * 60 * 60)) / (60 * 60);
+                    let mins = (uptime_secs % (60 * 60)) / 60;
+                    let secs = uptime_secs % 60;
+                    println!("{} Uptime normal: {:02}d:{:02}h:{:02}m:{:02}s", "[+]".green(), days, hours, mins, secs);
                 }
             }
         }
@@ -62,7 +66,7 @@ impl EvasionCheck {
                 println!("{} VM artifacts detected: {}", "[!]".red(), found);
                 suspicious_environment = true;
             },
-            (false, _) => println!("[+] No VM artifacts found"),
+            (false, _) => println!("{} No VM artifacts found", "[+]".green()),
         }
 
         // Registry Check
@@ -75,11 +79,10 @@ impl EvasionCheck {
             (false, _) => println!("[+] No VM registry artifacts found"),
         }
 
-        // Memory Check
-        println!("[+] Checking memory patterns...");
-        match Self::check_suspicious_memory() {
+        // Memory Patterns
+        match Self::scan_memory_for_patterns() {
             (true, found) => {
-                println!("{} Suspicious memory patterns detected: {}", "[!]".red(), found);
+                println!("{} Suspicious memory patterns found:{}", "[!]".red(), found);
                 suspicious_environment = true;
             },
             (false, _) => println!("[+] No suspicious memory patterns found"),
@@ -94,20 +97,41 @@ impl EvasionCheck {
         let mut sys = System::new_all();
         sys.refresh_all();
         
-        let suspicious_processes = [
-            "procmon", "processhacker",
-            "ida", "x64dbg", "ollydbg", "ghidra", 
-            "radare2", "cutter", "binary ninja", 
-            "cuckoo", "objdump", "wireshark"
+        let suspicious_patterns = [
+            "windbg", "dbgeng", "dbgsrv",
+            "x64dbg", "x32dbg",
+            "dbgx.shell", "dbgx.host",
+            "dbghost", "dbgshell",
+            "ida64", "ida32", "idapro",
+            "ollydbg", "immunity",
+            "ghidra", "radare2",
+            "dbghelp", "vsdbg",
+            "debugger", "debugging",
+            "wireshark", "tcpdump",
         ];
         
         let mut found_processes = Vec::new();
         
-        for (_, process) in sys.processes() {
+        for (pid, process) in sys.processes() {
             let process_name = process.name().to_string_lossy().to_ascii_lowercase();
-            for suspicious in &suspicious_processes {
-                if process_name.contains(suspicious) {
-                    found_processes.push(process_name.to_string());
+            
+            for pattern in &suspicious_patterns {
+                if process_name.contains(pattern) {
+                    found_processes.push(format!("{} (PID: {})", process_name, pid));
+                    break;
+                }
+            }
+            
+            let cmd = process.cmd();
+            for cmd_arg in cmd {
+                let cmd_lower = cmd_arg.to_string_lossy().to_ascii_lowercase();
+                if cmd_lower.contains("debugger") || 
+                   cmd_lower.contains("-debug=") ||
+                   cmd_lower.contains("--debug-") ||
+                   cmd_lower.contains("-dbg=") ||
+                   cmd_lower.contains("windbg") {
+                    found_processes.push(format!("{} (debug cmdline)", process_name));
+                    break;
                 }
             }
         }
@@ -245,95 +269,6 @@ impl EvasionCheck {
         (false, String::new())
     }
 
-    fn check_suspicious_memory() -> (bool, String) {
-        println!("[+] Starting memory analysis...");
-        
-        // Try to allocate and scan a small memory region
-        // This part of the program still needs work, but still uploading in the meantime
-        // Memory scanning doesn't work as intended right now
-        unsafe {
-            let size = 1024 * 1024; // 1MB test region
-            let buffer = VirtualAlloc(
-                None,
-                size,
-                MEM_COMMIT | MEM_RESERVE,
-                PAGE_READWRITE
-            );
-            
-            if buffer.is_null() {
-                return (true, "\n    Failed to allocate memory for testing".to_string());
-            }
-
-            let test_pattern = b"TEST_PATTERN";
-            std::ptr::copy_nonoverlapping(
-                test_pattern.as_ptr(),
-                buffer.cast::<u8>(),
-                test_pattern.len()
-            );
-            
-            let mut read_buffer = vec![0u8; test_pattern.len()];
-            std::ptr::copy_nonoverlapping(
-                buffer.cast::<u8>(),
-                read_buffer.as_mut_ptr(),
-                test_pattern.len()
-            );
-            
-            if read_buffer != test_pattern {
-                return (true, "\n    Memory read/write test failed".to_string());
-            }
-            
-            let scan_size = 4096;
-            let mut scan_buffer = vec![0u8; scan_size];
-            for offset in (0..size-scan_size).step_by(scan_size) {
-                let addr = buffer.add(offset);
-                if let Some(mem_content) = Self::read_memory_safely(addr.cast(), scan_size) {
-                    if let Some(sig) = Self::check_signatures(&mem_content) {
-                        return (true, format!("\n    Found signature '{}' at offset: 0x{:X}", sig, offset));
-                    }
-                }
-            }
-        }
-        
-        println!("[+] Memory analysis complete");
-        (false, String::new())
-    }
-    
-    fn read_memory_safely(addr: *const u8, size: usize) -> Option<Vec<u8>> {
-        unsafe {
-            match std::ptr::read_volatile(addr) {
-                _ => {
-                    let mut buffer = Vec::with_capacity(size);
-                    buffer.set_len(size);
-                    
-                    let result = std::panic::catch_unwind(move || {
-                        std::ptr::copy_nonoverlapping(addr, buffer.as_mut_ptr(), size);
-                        buffer
-                    });
-                    
-                    result.ok()
-                }
-            }
-        }
-    }
-    
-    fn check_signatures(mem_content: &[u8]) -> Option<String> {
-        let signatures: &[&[u8]] = &[
-            b"DBG", b"DEBUG", b"TRACE",
-            b"WINDBG", b"OLLYDBG", b"IDA",
-            b"x64dbg", b"immunity", b"radare2",
-            b"SANDBOX", b"VIRTUAL", b"QEMU",
-            b"VMware", b"VirtualBox", b"WINE"
-        ];
-    
-        for sig in signatures {
-            if mem_content.windows(sig.len()).any(|window| window == *sig) {
-                return Some(String::from_utf8_lossy(sig).to_string());
-            }
-        }
-        
-        None
-    }
-
     pub fn start_monitoring() -> (Arc<AtomicBool>, thread::JoinHandle<()>) {
         let is_running = Arc::new(AtomicBool::new(true));
         let monitor_running = is_running.clone();
@@ -351,11 +286,6 @@ impl EvasionCheck {
                 }
                 
                 if !monitor_running.load(Ordering::SeqCst) { break; }
-                if Self::check_suspicious_memory().0 {
-                    println!("[!] Suspicious memory patterns detected!");
-                }
-                
-                if !monitor_running.load(Ordering::SeqCst) { break; }
                 if Self::check_vm_registry().0 {
                     println!("[!] VM registry artifacts detected!");
                 }
@@ -368,7 +298,7 @@ impl EvasionCheck {
         (is_running, handle)
     }
     
-    pub fn stop_monitoring(mut monitor: (Arc<AtomicBool>, thread::JoinHandle<()>)) -> bool {
+    pub fn stop_monitoring(monitor: (Arc<AtomicBool>, thread::JoinHandle<()>)) -> bool {
         monitor.0.store(false, Ordering::SeqCst);
         
         match monitor.1.join() {
@@ -385,53 +315,120 @@ impl EvasionCheck {
 
     /// Delay Function
     pub fn add_delays() {
-        let mut rng = rand::thread_rng();
-        let delay = rng.gen_range(100..=1000);
+        let mut rng = rand::rng();
+        let delay = rng.random_range(100..=1000);
         thread::sleep(Duration::from_millis(delay));
     }
-}
 
-pub fn run_evasion_checks() -> bool {
-    let create_test_pattern = true;
-    
-    // Either this is busted or the actual memory scanning is busted
-    // I'll fix later
-    let buffer = if create_test_pattern {
+    fn scan_memory_for_patterns() -> (bool, String) {
+        println!("[+] Starting memory analysis...");
+        
+        let patterns = [
+            b"DEBUG_WATERMARK_1234".to_vec(),
+            b"ANALYSIS_PATTERN_5678".to_vec(),
+            b"DBG".to_vec(),
+            b"DEBUG".to_vec(),
+            b"TRACE".to_vec(),
+            b"BREAKPOINT".to_vec(),
+            b"IsDebuggerPresent".to_vec(),
+            b"CheckRemoteDebuggerPresent".to_vec(),
+            b"WinDbg".to_vec(),
+            b"x64dbg".to_vec(),
+            b"IDA".to_vec(),
+            b"Immunity".to_vec(),
+            b"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\AeDebug".to_vec(),
+            b"__REGISTER_CALLBACK__".to_vec(),
+            b"JIT_DEBUG_INFO".to_vec(),
+            b"VBOX".to_vec(),
+            b"VMware".to_vec(),
+            b"QEMU".to_vec(),
+            b"dbghelp.dll".to_vec(),
+            b"symsrv.dll".to_vec(),
+            //b"ntdll.dll".to_vec(), - Calling ntdll.dll by itself isn't practical since it's used by the NT kernel, so we'll skip (for now)
+            b"W\0i\0n\0D\0b\0g\0".to_vec(),  // "WinDbg" in UTF-16LE
+            b"D\0E\0B\0U\0G\0".to_vec(),     // "DEBUG" in UTF-16LE
+            b"dbgeng.dll".to_vec(),
+            b"dbgcore.dll".to_vec(),
+            b"wow64cpu.dll".to_vec(),
+            b"wow64win.dll".to_vec(),
+            b"wow64.dll".to_vec(),
+            b"WinDbgFrameClass".to_vec(),
+            //b"ID".to_vec(), - Window class for IDA, but it's triggering false positives so we'll comment it out for now
+            b"OLLYDBG".to_vec(),
+            b"SeDebugPrivilege".to_vec(),
+            b"CreateProcessA".to_vec(),
+            b"CreateProcessW".to_vec(),
+            b"DebugActiveProcess".to_vec(),
+        ];
+
+        let mut found = HashSet::new();
+        let mut mem_info: MEMORY_BASIC_INFORMATION = unsafe { std::mem::zeroed() };
+        
+        let mut sys_info: SYSTEM_INFO = unsafe { std::mem::zeroed() };
+        unsafe { GetSystemInfo(&mut sys_info) };
+        
+        println!("[+] Memory range: 0x{:X} - 0x{:X}", 
+            sys_info.lpMinimumApplicationAddress as usize,
+            sys_info.lpMaximumApplicationAddress as usize);
+
+        let mut current_addr = sys_info.lpMinimumApplicationAddress as usize;
+        
+        while current_addr < sys_info.lpMaximumApplicationAddress as usize {
+            let query_result = unsafe {
+                VirtualQuery(
+                    current_addr as *mut _,
+                    &mut mem_info,
+                    std::mem::size_of::<MEMORY_BASIC_INFORMATION>()
+                )
+            };
+
+            if query_result == 0 { break; }
+
+            if mem_info.State as u32 == MEM_COMMIT {
+                if let Some(buffer) = Self::read_memory_safely(current_addr as *const u8, 4096) {
+                    for pattern in &patterns {
+                        if buffer.windows(pattern.len()).any(|window| window == pattern) {
+                            found.insert(format!("Found pattern '{}' at address: 0x{:X}", 
+                                String::from_utf8_lossy(pattern),
+                                current_addr
+                            ));
+                        }
+                    }
+                }
+            }
+
+            current_addr += mem_info.RegionSize;
+        }
+
+        if !found.is_empty() {
+            (true, format!("\n    {}", found.into_iter().collect::<Vec<_>>().join("\n    ")))
+        } else {
+            (false, String::new())
+        }
+    }
+
+    fn read_memory_safely(addr: *const u8, size: usize) -> Option<Vec<u8>> {
+        let mut buffer = vec![0u8; size];
         unsafe {
-            // Increased size to make pattern more likely to be found
-            let size = 1024 * 1024; // 1MB instead of 1KB
-            let buffer = VirtualAlloc(
-                None,
+            if winapi::um::memoryapi::ReadProcessMemory(
+                winapi::um::processthreadsapi::GetCurrentProcess(),
+                addr as *const _,
+                buffer.as_mut_ptr() as *mut _,
                 size,
-                MEM_COMMIT | MEM_RESERVE,
-                PAGE_READWRITE
-            );
-            
-            if !buffer.is_null() {
-                // Write multiple debug signatures to increase detection chance
-                let pattern = b"DEBUG\0SANDBOX\0VMware\0TRACE\0";
-                std::ptr::copy_nonoverlapping(
-                    pattern.as_ptr(),
-                    buffer.cast::<u8>(),
-                    pattern.len()
-                );
-                
-                println!("{} Created memory with multiple test patterns at: {:p}", "[+]".yellow(), buffer);
+                std::ptr::null_mut(),
+            ) != 0 {
                 Some(buffer)
             } else {
                 None
             }
         }
-    } else {
-        None
-    };
+    }
+}
+
+pub fn run_evasion_checks() -> bool {
 
     EvasionCheck::add_delays();
     let result = EvasionCheck::check_environment();
-
-    if let Some(_) = buffer {
-        println!("{} Test patterns were active during scan", "[+]".yellow());
-    }
 
     result
 } 
