@@ -23,6 +23,10 @@ fn generate_aes_key() -> [u8; 16] {
     key
 }
 ```
+
+## TerryWare v1.5 Scan
+![AV Scan](https://i.imgur.com/NYoZFm5.png)
+
 ## Thank you
 <a href="https://github.com/Idov31">Idov31</a> for inspiring the functionality of encrypt()/decrypt() functions<br>
 <a href="https://academy.tcm-sec.com/p/rust-101">TCM Security</a> for a great Rust course
