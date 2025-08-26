@@ -1,7 +1,4 @@
 # TerryWare 🦀
-
-**02/22/25**: This repo is undergoing changes for new evasion tactics in my upcoming blog post
-
 Ransomware I wrote in Rust to demo for my [blog post on reverse engineering](https://ret2c.com/blog/2024-09/sorryterry/)<br>
 I'm not a great programmer, I only have experience with scripting, so apologies for the sloppy code.
 <br><br>
